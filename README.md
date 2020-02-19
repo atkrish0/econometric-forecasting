@@ -1,4 +1,4 @@
-# Time-Series-Analysis
+# Econometric Forecasting
 
 ## Regime Prediction:
 
