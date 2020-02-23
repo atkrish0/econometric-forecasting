@@ -2,19 +2,15 @@
 
 ## Regime Prediction:
 
- ### Dataset: 
-	• Big Macroeconomic dataset from FRED St. Louis desiged by McCracken and Ng (2015)
-	
-	• Involves 129 macroeconomic monthly time series data from 1959 to 2018
-	
-	• 8 Categories: Output and income, labor maket, housing, consumption, orders and inventories, money and credit, interest and exchange rate, prices in the stock market
+### Dataset: 
+Big Macroeconomic dataset from FRED St. Louis desiged by McCracken and Ng (2015).
+Involves 129 macroeconomic monthly time series data from 1959 to 2018.
+8 Categories: Output and income, labor maket, housing, consumption, orders and inventories, money and credit, interest and exchange rate, prices in the stock market.
 
- ### NBER Recession Dates:
-	• Labelling based on NBER dataset
-	
-	• 8 recession periods during the time period in consideration
-	
-	• 628 'normal' periods and '93' recession periods
+### NBER Recession Dates:
+• Labelling based on NBER dataset
+• 8 recession periods during the time period in consideration
+• 628 'normal' periods and '93' recession periods
 
  ### Data Cleaning:
 	• Removal of variables with missing observation/ imputation of some sort
