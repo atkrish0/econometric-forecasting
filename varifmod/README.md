@@ -276,7 +276,7 @@ mse3, df3 = var_create(columns=[...xgb-selected set...], data=fred)
 
 That design makes the project technically defensible for research and interview discussion: same endpoint model, controlled feature-selection interventions, explicit quantitative comparison.
 
-## 10. Interview Narrative (Concise)
+## 10. Interview Narrative
 
 Context:
 
@@ -288,13 +288,25 @@ Goal:
 
 Execution:
 
-1. Built a theory-driven benchmark VAR using standard macro variables.
-2. Built a Lasso-based pipeline to enforce sparse linear selection under time-aware CV, then re-estimated VAR on selected predictors.
-3. Built an XGBoost-based pipeline to capture nonlinear predictive importance, then re-estimated VAR on top-ranked predictors.
-4. Kept forecast target, split logic, lag structure, and evaluation metric (`MSE`) consistent across all paths to isolate the effect of selection strategy.
+1. Built a theory-driven benchmark VAR using macro variables chosen from economic priors.
+- What happened: selected an interpretable set (inflation, income, labor, policy rate, FX, housing), transformed to annual differences, and fit a fixed-lag VAR.
+- Why it matters: this provides a structurally coherent baseline and prevents the comparison from being purely algorithmic.
+
+2. Built a Lasso-based selection pipeline with time-aware validation, then re-estimated VAR on selected predictors.
+- What happened: used `LassoCV` with `TimeSeriesSplit` to select sparse features and then passed non-zero predictors into the same VAR forecasting pipeline.
+- Why it matters: this tests whether sparse linear selection improves downstream multivariate forecast performance, not just one-step supervised fit.
+
+3. Built an XGBoost-based selection pipeline to capture nonlinear predictor relevance, then re-estimated VAR on top-ranked features.
+- What happened: standardized transformed predictors, trained `XGBRegressor`, extracted top importance features, and used them as the VAR input set.
+- Why it matters: this evaluates whether nonlinear predictive salience translates into better linear system forecasts over multi-step horizons.
+
+4. Enforced a controlled experiment design across all three pipelines.
+- What happened: kept target definition, train/test period split, forecast horizon, lag order, and error metric (`MSE`) consistent.
+- Why it matters: differences in results can be attributed to feature-selection strategy rather than differences in downstream model or evaluation setup.
 
 Outcome:
 
 - The benchmark specification delivered the strongest forecast performance in this setup.
-- Main technical insight: strong one-step predictive feature ranking does not automatically transfer to better multi-step system forecasting under endogenous VAR dynamics.
-- Practical implication: for macro forecasting, structural coherence of variables can outperform purely data-driven ranking when horizon length and dynamic feedback matter.
+- Main technical insight: strong one-step feature ranking does not automatically transfer to stronger multi-step forecasts once endogenous VAR feedback loops are active.
+- Practical implication: for macro forecasting, economically coherent variable sets can outperform purely data-driven ranking when horizon length, regime shifts, and joint system dynamics matter.
+- Operational takeaway: ML selection remains useful for screening, but final model quality must be validated in the exact forecasting system used for decisions.

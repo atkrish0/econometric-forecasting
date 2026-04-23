@@ -58,6 +58,35 @@ Primary inputs:
 - `CMO-Historical-Data-Monthly.xlsx` (commodity panel).
 - `CPI-Data.xlsx` sheet `CUUR0000SA0R`.
 
+### 4.1 Data Snapshot (Brief)
+
+`CMO-Historical-Data-Monthly.xlsx`:
+
+- Monthly commodity price table from World Bank format.
+- One time column (`Date`) and many commodity columns (energy, food/softs, metals, fertilizers, etc.).
+- Values are nominal price levels by commodity.
+
+`CPI-Data.xlsx` (`CUUR0000SA0R`):
+
+- U.S. CPI time series in BLS-style sheet structure (year/period/value layout).
+- Parsed into a monthly `Date` index with one CPI column used as the inflation deflator.
+
+What is being modeled:
+
+- Not a single-label supervised target.
+- The project models the cross-sectional and temporal structure of commodity volatility:
+  - estimate historical volatility states,
+  - extract latent common volatility factors,
+  - simulate forward commodity-volatility paths.
+
+Why CPI is still needed even though commodity prices already exist:
+
+- The CMO commodity prices are nominal price levels.
+- If volatility is computed directly on nominal series, measured variation mixes:
+  - true commodity-specific dynamics, and
+  - broad inflation drift/regime effects.
+- CPI is used as the deflator so returns/volatility are based on real prices, which makes downstream clustering, factor extraction, and simulation more representative of commodity behavior rather than general price-level inflation noise.
+
 Core notebook path:
 
 ```python
@@ -76,6 +105,26 @@ $$
 $$
 
 then normalization to index scale.
+
+Why reconstruction is done:
+
+- The CPI sheet in this workflow is treated as potentially non-canonical in shape/value semantics (for example, growth-like entries instead of clean level index values).
+- Reconstruction converts the parsed CPI signal into a single consistent level series with monthly continuity, which is required for clean deflation.
+- It enforces a stable base index representation before rebasing, so downstream price adjustment is not driven by header/format idiosyncrasies.
+
+How it helps future steps:
+
+1. Deflation stability:
+- Real-price construction in Section 5 depends directly on the CPI multiplier. A noisy or misinterpreted CPI layer would inject artificial level shifts into all commodity series.
+
+2. Return quality:
+- Since returns are computed from inflation-adjusted prices, CPI inconsistencies would propagate into return spikes, contaminating volatility estimates.
+
+3. Decomposition and clustering robustness:
+- Trend/seasonal/irregular separation and correlation-distance clustering are sensitive to structural breaks; a consistent CPI level reduces non-economic artifacts in those components.
+
+4. Factor and simulation reliability:
+- EWMA volatility, PCA/FA factors, and ARIMA-GARCH simulations inherit whatever noise exists in the input return panel. CPI reconstruction reduces deflator-induced noise entering the latent-factor pipeline.
 
 Code anchor:
 
@@ -380,7 +429,7 @@ Where it currently diverges:
 
 These differences are explicit implementation choices and should be kept in mind when interpreting parity claims.
 
-## 13. Interview Narrative (Concise)
+## 13. Interview Narrative
 
 Context:
 
@@ -393,14 +442,36 @@ Goal:
 Execution:
 
 1. Ingested CMO + CPI data and converted nominal prices to Jan-2022 real prices.
-2. Converted to returns and decomposed price series into trend/seasonal/irregular components.
-3. Built irregular-component clustering and MDS geometry for cross-commodity structure.
-4. Estimated EWMA volatilities and extracted latent factors via PCA/FA.
-5. Modeled leading factors with ARIMA(1,0,1)+GARCH(1,1) and simulated 60-step forward volatility.
-6. Validated via moments, distributions, ACF, and persistence.
+- What is happening: commodity price levels are deflated with a rebased CPI multiplier.
+- Why it matters: nominal series embed broad inflation drift; deflation isolates commodity-specific movements so volatility estimates are not dominated by macro price-level effects.
+
+2. Converted real prices to returns and decomposed each series into trend, seasonal, and irregular components.
+- What is happening: returns stabilize scale, then additive decomposition separates persistent structure from residual shocks.
+- Why it matters: decomposition prevents structural trend/seasonality from being misread as shock volatility and improves comparability across commodities.
+
+3. Built irregular-component correlation distances, hierarchical clusters, and MDS geometry.
+- What is happening: pairwise similarity is defined through \(d_{ij}=1-\rho_{ij}\), then complete-linkage clustering and classical MDS map cross-commodity shock behavior.
+- Why it matters: this identifies volatility regimes and co-movement blocks that are difficult to see in raw time-series plots.
+
+4. Estimated nonparametric volatility with EWMA and extracted latent factors via PCA/FA.
+- What is happening: EWMA converts return noise into smooth conditional-volatility states; PCA/FA compress the volatility panel into common drivers and loadings.
+- Why it matters: dimensionality reduction produces a tractable latent state space for simulation while preserving most systematic variation.
+
+5. Fit ARIMA(1,0,1)+GARCH(1,1) on leading latent factors and simulated a 60-step horizon.
+- What is happening: ARIMA captures short-memory mean dynamics and GARCH captures time-varying conditional variance in factor innovations.
+- Why it matters: forecasting in factor space is more stable and data-efficient than fitting separate high-parameter models for every commodity.
+
+6. Back-transformed simulated factors to commodity-level volatility and validated against history.
+- What is happening: simulated factor paths are projected through PCA loadings and rescaled by historical moments to recover commodity volatility forecasts.
+- Why it matters: this closes the loop from latent simulation to actionable commodity-level risk views.
+
+7. Ran post-simulation diagnostics: moments, distribution overlap, ACF of squared volatility, and persistence checks.
+- What is happening: historical and simulated volatility behaviors are compared statistically, including GARCH persistence measured by \(\alpha+\beta\).
+- Why it matters: this tests realism of generated paths and guards against simulations that fit in-sample but fail stylized volatility properties.
 
 Outcome:
 
-- Established a full-stack, research-grade volatility pipeline from raw panels to simulated commodity-level volatility paths.
-- Identified common volatility regimes and persistent latent dynamics.
-- Clarified where Python implementation is aligned with, and where it diverges from, the original MATLAB reference.
+- Established a full-stack volatility pipeline from raw price panels to simulated commodity-level forward volatility paths.
+- Identified interpretable cross-commodity volatility regimes and persistent latent factor dynamics.
+- Demonstrated that factor-first simulation is an effective compromise between statistical flexibility and economic interpretability.
+- Documented exact alignment and divergence points versus the MATLAB reference, which makes future parity work and model governance straightforward.

@@ -1,4 +1,8 @@
-# IRD Pricer: Conceptual Implementation Document
+- For each question/phrase I ask, provide concise answers with a little bit of technical detail
+- Ensure technical accuracy and correctness
+- It should be short and to the point
+- Answer in quick bullet points which adequately cover the question asked.
+- For coding questions, all explanation should be within comments interspersed within the code, brief and to the point.# IRD Pricer: Conceptual Implementation Document
 
 ## 1. Overview
 
@@ -158,6 +162,11 @@ In current notebook sections, drift is often set to zero in practice:
 $$
 \mu_{t,j}=0.
 $$
+
+Note:
+
+- This section is the core Monte Carlo simulation layer of the project.
+- Each simulated path corresponds to one Monte Carlo scenario for forward-rate evolution; later pricing sections aggregate payoffs across these scenarios.
 
 Core block:
 
@@ -357,7 +366,7 @@ Technical interpretation:
 
 - Feature extraction (PCA) and sampling strategy (RNG + variance reduction) are both first-order drivers of pricing reliability in this setup.
 
-## 11. Interview Narrative (Concise)
+## 11. Interview Narrative
 
 Context:
 
@@ -369,14 +378,28 @@ Goal:
 
 Execution:
 
-1. Constructed SOFR discount factors and Treasury term-structure panel.
-2. Converted spot yields to forward segments and extracted latent curve factors with PCA.
-3. Calibrated HJM-style volatility from PCA loadings and simulated forward-rate paths under multiple RNG schemes.
-4. Priced cap/floor payoffs and benchmarked convergence across path counts.
-5. Implemented standard, antithetic, and control-variate estimators to compare variance behavior.
+1. Constructed SOFR discount factors and a multi-tenor Treasury curve panel.
+- What happened: cleaned and aligned SOFR and DGS maturities, then built daily discount factors used in pricing.
+- Why it matters: this establishes a consistent discounting backbone so pricing differences come from model dynamics, not discount inconsistencies.
+
+2. Converted spot yields into forward-curve segments and extracted latent factors with PCA.
+- What happened: transformed spot rates into interval forwards and decomposed curve motion into dominant principal components.
+- Why it matters: this reduces dimensionality and isolates structural drivers (level/slope/curvature-like effects) before simulation.
+
+3. Calibrated volatility from PCA structure and simulated HJM-style forward paths under multiple RNG schemes.
+- What happened: used factor-informed volatility loadings inside multiplicative forward-rate dynamics and compared `normal`, `uniform`, `sobol`, `halton`, and `lhs` sampling.
+- Why it matters: it tests how much pricing stability depends on both structural calibration and sampling design.
+
+4. Priced cap/floor payoffs and tracked convergence over increasing simulation counts.
+- What happened: estimated discounted payoff expectations across simulation grids and monitored convergence trajectories.
+- Why it matters: convergence behavior is the practical test of numerical reliability for derivative pricing outputs.
+
+5. Applied variance-reduction methods (standard, antithetic, control-style) and compared estimator dispersion.
+- What happened: ran alternative Monte Carlo estimators on the same simulated rate engine to quantify stability gains.
+- Why it matters: this separates model-quality effects from Monte Carlo-noise effects and improves confidence in the reported prices.
 
 Outcome:
 
 - Established a reproducible research framework linking curve factors to pricing outputs.
 - Showed that sampling method and variance reduction can materially affect price stability, even under the same structural model.
-- Identified clear next integration points: consistent control-variate baseline, tighter Nelson-Siegel coupling, and dashboard wiring for interactive analysis.
+- Identified concrete next integration priorities: consistent control-variate baseline, tighter Nelson-Siegel integration into the main notebook flow, and dashboard wiring for interactive sensitivity analysis.
