@@ -7,3 +7,6 @@ A repository to dive into time series analysis applied in the realm of economics
 * Time Series Forecasting of equity prices using Recurrent Neural Networks
 * Rudimentary GARCH model for volatility forecasting
 * Implementation of State Space Models and Kalman Filters
+* Interest Rate Derivatives pricer - Numerical Analysis demos
+* Commodity Volatility Modeling
+* Comparative study - ML vs Theory driven feature selection
