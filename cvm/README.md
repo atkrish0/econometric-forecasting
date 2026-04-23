@@ -1,370 +1,406 @@
-# CVM: Authoritative Implementation Document (Living)
+# CVM: Conceptual Implementation Document
 
-## 1) Project Scope and Objective
+## 1. Overview
 
-`cvm` is a commodity volatility modeling project inspired by the MathWorks soft-commodities example and implemented in Python. It builds an end-to-end workflow from raw commodity price data and CPI data to:
+`cvm` is a commodity-volatility modeling project that translates a MATLAB-style research workflow into Python notebooks, with `soft_v2.ipynb` as the primary implementation and `soft_v1.ipynb` as an earlier scaffold.
 
-- Inflation-adjusted commodity price panels (real Jan-2022 USD)
-- Return series and additive decomposition (trend/seasonal/irregular)
-- Cross-commodity structure discovery (hierarchical clustering + MDS)
-- Nonparametric volatility estimation (EWMA)
-- Volatility factor extraction (PCA + Factor Analysis)
-- Model-based volatility simulation (ARIMA + GARCH on latent factors)
-- Post-simulation diagnostics and persistence validation
+Core objective:
 
-This file is the single authoritative implementation record for `cvm`.
+- Build an end-to-end volatility pipeline from raw commodity and CPI data to structural decomposition, cross-commodity dependency analysis, and model-based volatility simulation.
 
-## 1.1) Source Authority Baseline
+Conceptual flow:
 
-Primary conceptual/code authority:
+1. Construct real (inflation-adjusted) commodity prices.
+2. Convert prices to returns.
+3. Decompose price series into trend/seasonal/irregular components.
+4. Cluster commodities using irregular-behavior similarity.
+5. Estimate nonparametric volatility (EWMA).
+6. Extract latent volatility factors (PCA / FA).
+7. Fit ARIMA+GARCH on factor dynamics and simulate forward volatility.
 
-- MathWorks example: `Volatility Modeling for Soft Commodities`
-- URL: `https://www.mathworks.com/help/finance/volatility-modeling-for-soft-commodities.html`
+## 2. Why This Stack Was Chosen
 
-The Python implementation follows this structure but introduces some implementation-specific deviations documented in Section 12.
+The modeling choices are complementary and intentional:
 
-## 2) Repository Contents (Current State)
+- `Additive decomposition` separates long-run, seasonal, and shock-like components before dependency analysis.
+- `Correlation-distance + clustering` reveals commodity co-movement regimes in idiosyncratic behavior.
+- `EWMA` provides a robust, low-assumption volatility proxy for many commodity series.
+- `PCA / Factor Analysis` compress high-dimensional volatility panels into latent common drivers.
+- `ARIMA(1,0,1) + GARCH(1,1)` models mean-reverting factor dynamics and conditional heteroskedasticity for forward simulation.
 
-```text
-cvm/
-  soft_v1.ipynb
-  soft_v2.ipynb
-  CMO-Historical-Data-Monthly.xlsx
-  CPI-Data.xlsx
-  prices_real_jan2022usd.csv
-  returns.csv
-  trend_component.csv
-  seasonal_component.csv
-  irregular_component.csv
-  clusters_irregular_complete.csv
-  ewma_volatility_matrix.csv
-  volatility_summary.csv
-  volatility_pca_components.csv
-  artifacts/
-    csv/
-    figures/
+This creates a layered architecture:
+
+1. Data conditioning.
+2. Structural extraction.
+3. Dependency geometry.
+4. Volatility state estimation.
+5. Stochastic forward projection.
+
+## 3. Notebook Roles: `soft_v1` vs `soft_v2`
+
+`soft_v1.ipynb`:
+
+- Imports CMO data.
+- Establishes date/index handling.
+- Builds early commodity-class and soft/hard categorization logic.
+
+`soft_v2.ipynb`:
+
+- Implements the complete production pipeline end-to-end.
+- Includes all transformations, outputs, clustering, factor work, and simulation diagnostics.
+
+Conceptually, `soft_v1` is lineage and taxonomy scaffolding; `soft_v2` is the full modeling engine.
+
+## 4. Data Ingestion and CPI Layer
+
+Primary inputs:
+
+- `CMO-Historical-Data-Monthly.xlsx` (commodity panel).
+- `CPI-Data.xlsx` sheet `CUUR0000SA0R`.
+
+Core notebook path:
+
+```python
+DATA = Path.cwd()
+CMO_PATH = DATA / "CMO-Historical-Data-Monthly.xlsx"
+CPI_PATH = DATA / "CPI-Data.xlsx"
+
+prices_nominal = read_worldbank_cmo_monthly_prices(CMO_PATH)
+cpi = read_bls_cpi_sheet(CPI_PATH, sheet="CUUR0000SA0R")
 ```
 
-Notes:
+The notebook includes a CPI reconstruction step:
 
-- `soft_v2.ipynb` is the main implementation notebook.
-- `soft_v1.ipynb` is an earlier scaffold for ingestion/classification.
-- `artifacts/csv` and `artifacts/figures` exist but are currently empty.
+$$
+\text{CPILevel}_t = \prod_{i \le t} \left(1 + \frac{-c_i}{100}\right),
+$$
 
-## 3) Runtime, Libraries, and Execution Surface
+then normalization to index scale.
 
-- Notebook kernel metadata: Python `3.11.5`, kernel `python3` (`display_name: base`).
-- Primary stack:
-  - Data: `pandas`, `numpy`, `pathlib`, `re`
-  - Visualization: `matplotlib`, `seaborn`, 3D plotting toolkit
-  - Econometrics/TS: `statsmodels` (`seasonal_decompose`, ARIMA), `arch` (GARCH)
-  - ML/Factor methods: `sklearn` (`PCA`, `FactorAnalysis`)
-  - Clustering/geometry: `scipy` hierarchy and distance tools
-- Main entrypoint for full pipeline: `soft_v2.ipynb`.
+Code anchor:
 
-## 4) Data Sources and Input Contracts
-
-## 4.1 Commodity Prices
-
-- Source file: `CMO-Historical-Data-Monthly.xlsx`
-- Reader in notebook: `read_worldbank_cmo_monthly_prices(...)`
-- Expected outcome:
-  - Monthly date index at month-end
-  - Numeric commodity price columns across soft/hard commodities
-
-## 4.2 CPI Data
-
-- Source file: `CPI-Data.xlsx`
-- Reader in notebook: `read_bls_cpi_sheet(path, sheet="CUUR0000SA0R")`
-- Reader behavior:
-  - Detects header row dynamically
-  - Requires `Year` and `Period` structure
-  - Converts to monthly month-end index
-  - Produces single `CPI` column
-
-## 4.3 Derived Data Products (persisted)
-
-- `prices_real_jan2022usd.csv`: 775 rows, 72 columns, `1960-01-31` to `2024-07-31`
-- `returns.csv`: 774 rows, 72 columns, `1960-02-29` to `2024-07-31`
-- `trend_component.csv`: 248 rows, 72 columns, `2003-12-31` to `2024-07-31`
-- `seasonal_component.csv`: 248 rows, 72 columns, `2003-12-31` to `2024-07-31`
-- `irregular_component.csv`: 248 rows, 72 columns, `2003-12-31` to `2024-07-31`
-- `clusters_irregular_complete.csv`: 71 rows, 2 columns (commodity/cluster)
-- `ewma_volatility_matrix.csv`: 774 rows, 72 columns
-- `volatility_summary.csv`: 71 rows, 5 columns (cross-commodity volatility stats)
-- `volatility_pca_components.csv`: 774 rows, 4 columns (date + PCs)
-
-## 5) End-to-End Pipeline in `soft_v2.ipynb`
-
-## Section A: Project Scaffolding
-
-- Defines file paths from `Path.cwd()`.
-- Asserts existence of core input files.
-- Prints available CPI sheets for schema validation.
-
-## Section B: Data Ingestion
-
-- Loads and parses World Bank CMO monthly price panel.
-- Loads CPI series from the BLS sheet `CUUR0000SA0R`.
-- Performs sanity checks on shape/date ranges and numeric parse quality.
-
-Key implementation detail:
-
-- The notebook includes a CPI reconstruction step from interpreted percentage changes:
-  - `cpi_level = (1 + (-cpi_series) / 100).cumprod()`
-  - Then normalized to index base 100.
-- This is a project-specific transformation choice and should be considered part of current model assumptions.
-
-## Section C: Inflation Adjustment (Jan-2022 USD)
-
-- Normalizes CPI (MATLAB-style convention) and rebases to anchor:
-  - `anchor = 2022-01-31`
-  - `CPI_rebased_t = CPI_t / CPI_anchor`
-- Aligns commodity prices and CPI by date intersection.
-- Converts nominal prices to real prices:
-  - `real_price_t = nominal_price_t * CPI_rebased_t`
-- Saves `prices_real_jan2022usd.csv`.
-
-## Section D: Returns Conversion
-
-- Computes arithmetic returns:
-  - `returns = prices_real.pct_change()`
-- Handles problematic values:
-  - Replaces `+/-inf` with `NaN`
-- Saves `returns.csv`.
-- Tracks valid observation counts over time.
-
-## Section E: Additive Decomposition
-
-- Applies `seasonal_decompose(..., model="additive", period=12, extrapolate_trend="freq")` commodity by commodity.
-- Decomposition outputs:
-  - Trend
-  - Seasonal
-  - Irregular (residual)
-- Aligns and trims edge NaNs generated by convolution windows.
-- Saves:
-  - `trend_component.csv`
-  - `seasonal_component.csv`
-  - `irregular_component.csv`
-
-## Section F1: Hierarchical Clustering (Irregular Component)
-
-- Computes pairwise Pearson correlation on irregular components.
-- Converts correlation to distance:
-  - `distance = 1 - corr`
-- Runs complete-linkage hierarchical clustering with optimal ordering:
-  - `linkage(..., method="complete", optimal_ordering=True)`
-- Uses `k = 4` max-cluster cut for current grouping snapshot.
-- Saves cluster membership:
-  - `clusters_irregular_complete.csv`
-
-## Section F2: Classical MDS (3D)
-
-- Uses the irregular-component distance matrix.
-- Classical MDS via double-centering on squared distances:
-  - `B = -0.5 * J @ D^2 @ J`
-- Eigen-decomposition and embedding into top positive dimensions (up to 3).
-- Produces 3D scatter by cluster and optional convex hull overlays.
-
-## Part I: Nonparametric Volatility Estimation
-
-## Section G: EWMA Volatility
-
-- Primary smoothing parameter:
-  - `lambda = 0.94`
-- Implements EWMA via IIR filtering in a custom function:
-  - `ewma_volatility(returns_df, lam=0.94)`
-- Also computes an alternate EWMA form via pandas `ewm` in later sections.
-- Produces per-commodity volatility panel `vol_ewma`.
-
-## Section H: Volatility Aggregation and Cross-Commodity Analysis
-
-- Builds summary metrics per commodity:
-  - Mean volatility
-  - Volatility std
-  - One-lag volatility persistence proxy
-- Computes volatility correlation heatmap.
-- Applies PCA (`n_components=3`) to volatility panel.
-- Saves:
-  - `volatility_summary.csv`
-  - `ewma_volatility_matrix.csv`
-  - `volatility_pca_components.csv`
-
-## Section H2: Factor Analysis on Volatility
-
-- Uses `FactorAnalysis(n_components=3)` on volatility matrix.
-- Extracts loadings and strongest-factor indicator matrix.
-- Visualizes heatmaps to mirror MATLAB-style diagnostics.
-
-## Part II: Model-Based Volatility Simulation
-
-## MB-1: PCA of Inferred Volatilities
-
-- Rebuilds inferred volatility from returns:
-  - `vol = sqrt(EWMA of squared returns)`
-- Column-wise z-score normalization.
-- PCA fit with full SVD.
-- Captures:
-  - Scores (latent factor time series)
-  - Coefficients/loadings
-  - Eigenvalues (scree diagnostics)
-
-## MB-2: ARIMA + GARCH on Principal Components
-
-- For each primary component (PC1, PC2):
-  - Fit mean model: `ARIMA(1,0,1)`
-  - Fit variance model on residuals: `GARCH(1,1)` with Student-t innovations
-- Helper function: `fit_arima_garch_t(series, set_omega=None)`
-- Outputs include printed ARIMA and GARCH fit summaries.
-
-## MB-3: Forward Volatility Simulation
-
-- Forecast horizon:
-  - `num_forecast_steps = 60` (monthly steps)
-- Simulates PC paths from fitted GARCH models via `.model.simulate(...)`.
-- Combines simulated components and back-transforms to commodity volatility domain:
-  - `approx_vol = mu + sigma * (sim_components @ coeffs[:, :2].T)`
-- Creates forecast date index after last historical observation.
-- Produces overlay plot of historical vs model-based volatility for selected commodity.
-
-## MB-4: Post-Simulation Validation
-
-- Compares historical and simulated moments (mean/std) for selected commodity.
-- Overlays distributions (histograms).
-- Compares ACF of squared volatility (historical vs simulated).
-- Computes persistence indicator from GARCH parameters:
-  - `alpha + beta`
-
-## 6) Legacy Notebook (`soft_v1.ipynb`) Role
-
-`soft_v1.ipynb` primarily contains early-stage setup:
-
-- Importing CMO data
-- Date/index setup
-- Initial commodity class mapping
-- Soft vs hard category tagging logic
-
-Current relevance:
-
-- Useful as lineage/context, but the complete pipeline is implemented in `soft_v2.ipynb`.
-
-## 7) Core Methodological Assumptions
-
-1. CPI reconstruction and rebasing choices are custom and embedded in notebook logic.
-2. Arithmetic returns are used (not log returns) in the current baseline flow.
-3. Additive decomposition assumes 12-month seasonality and linear additive structure.
-4. Correlation-distance (`1 - corr`) on irregular components is the clustering similarity basis.
-5. EWMA decay fixed at `lambda = 0.94`.
-6. Volatility latent dynamics are represented by low-dimensional PCs, modeled with ARIMA(1,0,1)+GARCH(1,1).
-
-## 12) Alignment Check vs MathWorks Source
-
-Status summary:
-
-- `cvm/README.md` is in sync with current Python outputs and notebook behavior.
-- Current Python implementation is directionally aligned with the MathWorks flow, but not fully equivalent.
-
-### 12.1 Areas in Sync (Conceptual)
-
-1. Pipeline shape is aligned.
-- Import prices/CPI, inflation-adjust prices, compute returns, decompose, cluster, estimate EWMA volatility, perform factor/PCA analysis, then model/simulate volatility with ARIMA+GARCH.
-
-2. Core model choices are aligned.
-- EWMA variance recursion with `lambda = 0.94`.
-- PCA on normalized volatility.
-- ARIMA(1,0,1) + GARCH(1,1) for leading components.
-- Back-transform from PC space to volatility domain.
-
-3. Simulation horizon is aligned.
-- `numForecastSteps = 60` in both source and Python notebook.
-
-### 12.2 Divergences from Source (Important)
-
-1. Universe selection diverges (major).
-- Source: explicitly filters to **soft commodities with complete histories**.
-- Current Python: processes the broader commodity set from CMO (including hard commodities), evidenced by columns such as crude oil, natural gas, aluminum, gold, and silver in `prices_real_jan2022usd.csv`.
-
-2. Cluster count differs.
-- Source clustering cut: `numClusters = 3`.
-- Python notebook currently uses `k = 4` for `fcluster(...)`.
-
-3. Decomposition method differs.
-- Source uses MATLAB `trenddecomp` (supports multiple seasonal components).
-- Python uses `statsmodels.seasonal_decompose(..., period=12, additive)`.
-
-4. CPI handling differs.
-- Source uses CPI timetable directly (`CUUR0000SA0R`) and rebases to Jan-2022.
-- Python includes an additional CPI reconstruction step from interpreted percentage-change series before rebasing, which is a custom adaptation.
-
-5. Factor-analysis sample scope differs.
-- Source factor analysis is on inferred volatility for soft-only universe.
-- Python factor analysis is on the broader universe unless manually filtered.
-
-### 12.3 Practical Implication
-
-If strict source parity is required, the highest-impact fixes are:
-
-1. Enforce soft-only + no-missing commodity filter before downstream steps.
-2. Set clustering cut to 3 groups.
-3. Decide whether to replicate `trenddecomp` behavior more closely or keep current decomposition with explicit caveat.
-4. Standardize CPI ingest path to mirror source assumptions.
-
-## 8) Current Strengths
-
-- Full traceable pipeline from raw inputs to saved modeling outputs.
-- Clear separation of nonparametric and model-based volatility modules.
-- Persisted intermediate artifacts enable reproducibility and downstream reuse.
-- Includes both structural analysis (clusters/MDS) and dynamic simulation.
-
-## 9) Known Gaps and Technical Debt
-
-1. Notebook-centric architecture
-- Logic is in notebook cells; no packaged module/pipeline runner yet.
-
-2. Repeated implementations
-- EWMA/volatility transformations appear in multiple forms in different sections.
-
-3. Assumption documentation in code
-- CPI reconstruction sign-flip logic is implemented but not parameterized/config-managed.
-
-4. Artifact management
-- Outputs are written in project root while `artifacts/` directories are unused.
-
-5. Validation breadth
-- Post-simulation diagnostics are strong for selected commodities but not yet automated across all series.
-
-6. Dependency pinning
-- No environment lockfile or explicit `requirements` file in this folder.
-
-## 10) Reproducible Run Order (Current)
-
-From project root:
-
-```bash
-cd /Users/atheeshkrishnan/AK/DEV/econometric-forecasting/cvm
-jupyter notebook
+```python
+cpi_series = pd.to_numeric(cpi[col_name], errors="coerce")
+cpi_level = (1 + (-cpi_series) / 100).cumprod()
+cpi_level = cpi_level / cpi_level.iloc[0] * 100
+cpi = pd.DataFrame({"CPI": cpi_level}, index=cpi.index)
 ```
 
-Then run `soft_v2.ipynb` in section order:
+## 5. Inflation Adjustment and Real Price Construction
 
-1. Project Scaffolding
-2. Data Ingestion
-3. Inflation Adjustment
-4. Returns Conversion
-5. Decomposition
-6. Clustering + MDS
-7. EWMA + Volatility Aggregation
-8. PCA/FA volatility factors
-9. ARIMA-GARCH simulation and validation
+The pipeline rebases CPI to January 2022:
 
-## 11) Living Document Update Protocol
+$$
+\text{CPI}^{\text{rebased}}_t = \frac{\text{CPI}_t}{\text{CPI}_{\text{Jan-2022}}}.
+$$
 
-For every project change, update this file with:
+Real prices are computed as:
 
-- What changed (data logic, model spec, output schemas, diagnostics)
-- Why it changed (bug fix, empirical mismatch, modeling upgrade)
-- Evidence (metrics/plots/tests)
-- Backward compatibility impact (if any)
-- New limitations and next priority tasks
+$$
+P^{\text{real}}_{t,j} = P^{\text{nominal}}_{t,j}\cdot \text{CPI}^{\text{rebased}}_t.
+$$
 
-This keeps `cvm/README.md` as the single definitive implementation reference.
+Notebook code:
+
+```python
+anchor = pd.Timestamp("2022-01-31")
+cpi_rebased = cpi.copy()
+cpi_rebased["CPI_rebased"] = cpi_rebased["CPI"] / cpi_rebased.loc[anchor, "CPI"]
+aligned = prices_nominal.join(cpi_rebased["CPI_rebased"], how="inner")
+prices_real = aligned.drop(columns=["CPI_rebased"]).mul(aligned["CPI_rebased"], axis=0)
+prices_real.to_csv("prices_real_jan2022usd.csv")
+```
+
+This stage defines the valuation-consistent baseline for all downstream volatility analysis.
+
+## 6. Returns and Structural Decomposition
+
+Arithmetic returns:
+
+$$
+r_{t,j} = \frac{P^{\text{real}}_{t,j} - P^{\text{real}}_{t-1,j}}{P^{\text{real}}_{t-1,j}}.
+$$
+
+Notebook code:
+
+```python
+returns = prices_real.pct_change().dropna(how='all')
+returns = returns.replace([np.inf, -np.inf], np.nan)
+returns.to_csv("returns.csv")
+```
+
+Additive decomposition per commodity:
+
+$$
+P_{t,j}^{\text{real}} = T_{t,j} + S_{t,j} + I_{t,j},
+$$
+
+where \(T\) is trend, \(S\) is seasonal, and \(I\) is irregular.
+
+Code anchor:
+
+```python
+res = seasonal_decompose(s, model='additive', period=12, extrapolate_trend='freq')
+```
+
+Saved outputs:
+
+- `trend_component.csv`
+- `seasonal_component.csv`
+- `irregular_component.csv`
+
+Conceptual role:
+
+- isolate idiosyncratic shocks (`irregular`) for distance-based clustering.
+
+## 7. Dependency Structure: Clustering and MDS
+
+Irregular-component correlation matrix:
+
+$$
+\rho_{ij} = \operatorname{corr}(I_{\cdot,i}, I_{\cdot,j}).
+$$
+
+Distance transform:
+
+$$
+d_{ij} = 1 - \rho_{ij}.
+$$
+
+Complete-linkage clustering is applied to the condensed distance matrix:
+
+```python
+corr = irregular_df.corr(method="pearson", min_periods=12)
+dist_mat = 1.0 - corr
+dist_condensed = squareform(dist_mat.values, checks=False)
+Z = linkage(dist_condensed, method="complete", optimal_ordering=True)
+k = 4
+clusters = fcluster(Z, k, criterion="maxclust")
+cluster_map.to_csv("clusters_irregular_complete.csv")
+```
+
+Classical MDS is then used for low-dimensional geometry:
+
+$$
+B = -\frac{1}{2}J D^2 J,\quad J=I-\frac{1}{n}\mathbf{1}\mathbf{1}^\top.
+$$
+
+Embedding:
+
+$$
+X = V_m \Lambda_m^{1/2}.
+$$
+
+Code anchor:
+
+```python
+J = np.eye(n) - np.ones((n, n)) / n
+B = -0.5 * J @ (D ** 2) @ J
+eigvals, eigvecs = np.linalg.eigh(B)
+X = eigvecs[:, :m] @ np.diag(np.sqrt(eigvals[:m]))
+```
+
+This gives an interpretable 3D map of commodity shock-behavior similarity.
+
+## 8. Nonparametric Volatility Estimation (EWMA)
+
+The project uses EWMA with \(\lambda=0.94\):
+
+$$
+\sigma_{t,j}^2 = (1-\lambda)r_{t,j}^2 + \lambda \sigma_{t-1,j}^2.
+$$
+
+Implemented in two forms:
+
+1. IIR filter-based custom function:
+
+```python
+def ewma_volatility(returns_df, lam=lambda_):
+    var = lfilter([1 - lam], [1, -lam], r**2)
+```
+
+2. Pandas `ewm` form for aggregation stage:
+
+```python
+span = 1 / (1 - lambda_)
+ewma_vols = pd.DataFrame({col: returns[col].ewm(span=span).std() for col in returns.columns})
+```
+
+Why this matters:
+
+- EWMA produces a stable, scalable inferred-volatility matrix for many commodities without heavy parametric assumptions.
+
+## 9. Volatility Factors: PCA and Factor Analysis
+
+### 9.1 PCA on Volatility Matrix
+
+Volatility matrix \(V\) is z-score normalized:
+
+$$
+Z_{t,j} = \frac{V_{t,j}-\mu_j}{\sigma_j}.
+$$
+
+PCA is applied:
+
+$$
+Z = U\Lambda W^\top.
+$$
+
+Notebook code:
+
+```python
+mu = vol_df.mean(axis=0)
+sigma = vol_df.std(axis=0, ddof=0)
+vol_z = (vol_df - mu) / sigma
+pca = PCA(svd_solver="full")
+scores = pca.fit_transform(vol_z.values)
+coeffs = pca.components_.T
+eigVals = pca.explained_variance_
+```
+
+Outputs:
+
+- Common volatility factors (scores).
+- Commodity loadings (coefficients).
+- Scree diagnostics.
+
+### 9.2 Factor Analysis
+
+Factor model:
+
+$$
+v_t = \Lambda f_t + \epsilon_t.
+$$
+
+Code anchor:
+
+```python
+fa = FactorAnalysis(n_components=3, random_state=0)
+fa.fit(vol_ewma.dropna())
+```
+
+This complements PCA by emphasizing latent-factor structure with explicit idiosyncratic terms.
+
+## 10. Model-Based Volatility Simulation
+
+### 10.1 ARIMA + GARCH on Leading PCs
+
+For each leading PC series:
+
+1. Mean dynamics via ARIMA(1,0,1):
+
+$$
+x_t = c + \phi x_{t-1} + \theta \epsilon_{t-1} + \epsilon_t.
+$$
+
+2. Residual variance via GARCH(1,1):
+
+$$
+h_t = \omega + \alpha \epsilon_{t-1}^2 + \beta h_{t-1}.
+$$
+
+Notebook function:
+
+```python
+def fit_arima_garch_t(series, set_omega=None):
+    arima_res = ARIMA(series, order=(1,0,1)).fit()
+    resid = arima_res.resid
+    garch = arch_model(resid, mean="Zero", vol="GARCH", p=1, q=1, dist="t")
+```
+
+### 10.2 PC Simulation and Back-Transformation
+
+Simulate PC paths for horizon \(H=60\):
+
+```python
+num_forecast_steps = 60
+sim_pc1 = garch1.model.simulate(garch1.params, nobs=num_forecast_steps)
+sim_pc2 = garch2.model.simulate(garch2.params, nobs=num_forecast_steps)
+sim_components = np.column_stack((sim_pc1_vals, sim_pc2_vals))
+```
+
+Back-transform to commodity volatility:
+
+$$
+\hat{V}_{\text{future}} = \mu + \Sigma \left(S \cdot W_{1:2}^\top\right),
+$$
+
+implemented as:
+
+```python
+approx_vol = mu + sigma * (sim_components @ coeffs[:, :2].T)
+```
+
+This projects latent-factor simulations back into commodity-level volatility forecasts.
+
+## 11. Validation and Diagnostics
+
+Post-simulation validation compares historical vs simulated behavior for selected commodities:
+
+1. Mean/std comparison.
+2. Distribution overlay.
+3. ACF of squared volatility.
+4. GARCH persistence check:
+
+$$
+\text{Persistence} = \alpha + \beta.
+$$
+
+Code anchor:
+
+```python
+alpha1_pc1 = garch1.params['alpha[1]']
+beta1_pc1  = garch1.params['beta[1]']
+```
+
+If \(\alpha+\beta\) is near 1, volatility shocks are highly persistent.
+
+## 12. Source Alignment (MathWorks) and Current Divergences
+
+Conceptual source:
+
+- MathWorks example “Volatility Modeling for Soft Commodities”.
+
+Where this implementation is aligned:
+
+1. Overall pipeline stages.
+2. EWMA + factor-based volatility workflow.
+3. ARIMA-GARCH-based model simulation with 60-step horizon.
+
+Where it currently diverges:
+
+1. Universe scope:
+- Current notebook processes broader commodities (including hard commodities), not only soft-commodity complete-history subset.
+2. Cluster cut:
+- Current notebook uses `k = 4`; source example uses 3-cluster framing.
+3. Decomposition routine:
+- Python uses `seasonal_decompose`; source example uses MATLAB `trenddecomp`.
+4. CPI handling:
+- Python includes a reconstruction step before rebasing.
+
+These differences are explicit implementation choices and should be kept in mind when interpreting parity claims.
+
+## 13. Interview Narrative (Concise)
+
+Context:
+
+- Needed a robust volatility framework for a large cross-commodity universe with inflation adjustment, latent common factors, and forward simulation.
+
+Goal:
+
+- Build a pipeline that explains historical commodity volatility structure and generates defensible forward volatility scenarios.
+
+Execution:
+
+1. Ingested CMO + CPI data and converted nominal prices to Jan-2022 real prices.
+2. Converted to returns and decomposed price series into trend/seasonal/irregular components.
+3. Built irregular-component clustering and MDS geometry for cross-commodity structure.
+4. Estimated EWMA volatilities and extracted latent factors via PCA/FA.
+5. Modeled leading factors with ARIMA(1,0,1)+GARCH(1,1) and simulated 60-step forward volatility.
+6. Validated via moments, distributions, ACF, and persistence.
+
+Outcome:
+
+- Established a full-stack, research-grade volatility pipeline from raw panels to simulated commodity-level volatility paths.
+- Identified common volatility regimes and persistent latent dynamics.
+- Clarified where Python implementation is aligned with, and where it diverges from, the original MATLAB reference.

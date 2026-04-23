@@ -10,6 +10,32 @@ Inflation forecasting is treated here as a system-level macroeconomic problem ra
 
 The central point is to test whether data-driven feature selection improves downstream dynamic forecasting once variables interact endogenously in a multivariate time-series model.
 
+### Why Lasso and XGBoost Were Chosen
+
+The two ML methods were selected to represent complementary feature-selection philosophies before the common VAR endpoint:
+
+- `Lasso` is a sparse linear selector, useful when macro variables are numerous and collinear. It offers coefficient-level interpretability and an explicit regularization path through
+
+$$
+\hat{\beta}^{\text{lasso}} = \arg\min_{\beta}
+\left(
+\frac{1}{2n}\|y-X\beta\|_2^2 + \lambda\|\beta\|_1
+\right).
+$$
+
+- `XGBoost` is a nonlinear tree-ensemble selector, useful when signal may come from interactions and threshold effects that linear sparsity may miss. In additive form:
+
+$$
+\hat{f}(x) = \sum_{m=1}^{M} \gamma_m h_m(x).
+$$
+
+- Using both gives a methodologically clean comparison against the theory-driven benchmark:
+  - theory-prior selection,
+  - sparse linear ML selection,
+  - nonlinear ML selection.
+
+- This design isolates the real research question in this project: not only which model predicts inflation directly, but which selected variables produce the strongest downstream multivariate forecast once all predictors are embedded in the same VAR dynamics.
+
 ## 2. Data and Economic Framing
 
 The analysis is built on the FRED-MD monthly macro panel, with inflation proxied from `CPIAUCSL` after transformation. The dataset gives broad coverage across real activity, labor, policy rates, housing, and financial indicators, which makes it suitable for high-dimensional feature selection experiments.
@@ -249,3 +275,26 @@ mse3, df3 = var_create(columns=[...xgb-selected set...], data=fred)
 ```
 
 That design makes the project technically defensible for research and interview discussion: same endpoint model, controlled feature-selection interventions, explicit quantitative comparison.
+
+## 10. Interview Narrative (Concise)
+
+Context:
+
+- The project addressed inflation forecasting with a high-dimensional macro dataset where many predictors are correlated, regime-sensitive, and potentially nonstationary.
+
+Goal:
+
+- Determine whether ML-based feature selection can improve inflation forecasting when the final model is a multivariate dynamic system (`VAR`) rather than a standalone regression.
+
+Execution:
+
+1. Built a theory-driven benchmark VAR using standard macro variables.
+2. Built a Lasso-based pipeline to enforce sparse linear selection under time-aware CV, then re-estimated VAR on selected predictors.
+3. Built an XGBoost-based pipeline to capture nonlinear predictive importance, then re-estimated VAR on top-ranked predictors.
+4. Kept forecast target, split logic, lag structure, and evaluation metric (`MSE`) consistent across all paths to isolate the effect of selection strategy.
+
+Outcome:
+
+- The benchmark specification delivered the strongest forecast performance in this setup.
+- Main technical insight: strong one-step predictive feature ranking does not automatically transfer to better multi-step system forecasting under endogenous VAR dynamics.
+- Practical implication: for macro forecasting, structural coherence of variables can outperform purely data-driven ranking when horizon length and dynamic feedback matter.
