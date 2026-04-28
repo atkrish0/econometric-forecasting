@@ -2,17 +2,18 @@
 
 ## 1. Overview
 
-Inflation forecasting is treated here as a system-level macroeconomic problem rather than a single-equation prediction task. The project compares three forecasting pipelines that all end in a Vector Autoregression (VAR), but differ in how predictors are chosen:
+Inflation forecasting is treated here as a system-level macroeconomic problem rather than a single-equation prediction task. The project compares four forecasting pipelines that all end in a Vector Autoregression (VAR), but differ in how predictors are chosen:
 
 1. A theory-driven benchmark specification.
 2. A Lasso-selected specification.
 3. An XGBoost-selected specification.
+4. A PCA-ranked specification.
 
 The central point is to test whether data-driven feature selection improves downstream dynamic forecasting once variables interact endogenously in a multivariate time-series model.
 
-### Why Lasso and XGBoost Were Chosen
+### Why Lasso, XGBoost, and PCA Were Chosen
 
-The two ML methods were selected to represent complementary feature-selection philosophies before the common VAR endpoint:
+The model-selection methods were chosen to represent complementary philosophies before the common VAR endpoint:
 
 - `Lasso` is a sparse linear selector, useful when macro variables are numerous and collinear. It offers coefficient-level interpretability and an explicit regularization path through
 
@@ -29,10 +30,19 @@ $$
 \hat{f}(x) = \sum_{m=1}^{M} \gamma_m h_m(x).
 $$
 
+- `PCA` is a dimensionality-reduction method that identifies dominant directions of predictor variation. In this project it is used as a feature-ranking device rather than as the final forecasting model. A loading-weighted score is assigned to each original variable:
+
+$$
+\text{score}_j = \sum_{k=1}^{K} |\ell_{jk}|\, w_k,
+$$
+
+where \(\ell_{jk}\) is the loading of feature \(j\) on component \(k\), and \(w_k\) is the explained-variance ratio of component \(k\).
+
 - Using both gives a methodologically clean comparison against the theory-driven benchmark:
   - theory-prior selection,
   - sparse linear ML selection,
-  - nonlinear ML selection.
+  - nonlinear ML selection,
+  - unsupervised factor-based ranking.
 
 - This design isolates the real research question in this project: not only which model predicts inflation directly, but which selected variables produce the strongest downstream multivariate forecast once all predictors are embedded in the same VAR dynamics.
 
@@ -133,6 +143,11 @@ $$
 \text{MSE} = \frac{1}{n}\sum_{t=1}^{n}(\hat{\pi}_t - \pi_t)^2.
 $$
 
+Specific implementation detail:
+
+- The notebook fits the VAR on a fixed training window (`1973-01` to `2009-01`) and generates a `120`-month forecast horizon.
+- The same `var_create(...)` function is reused across all model branches, so only the input variable set changes.
+
 Notebook code blocks:
 
 ```python
@@ -153,7 +168,7 @@ var_mse = metrics.mean_squared_error(
 Traditional variable set construction in the notebook:
 
 ```python
-old_names_diff = ["CPIAUCSL_diff", "RPI_diff", "UNRATE_diff", "FEDFUNDS_diff", "TWEXMMTH_diff", "HOUST_diff"]
+old_names_diff = ["CPIAUCSL_diff", "RPI_diff", "UNRATE_diff", "FEDFUNDS_diff", "TWEXAFEGSMTHx_diff", "HOUST_diff"]
 new_names_diff = ["cpi_diff", "rpi_diff", "unemp_diff", "fedrate_diff", "usd_diff", "houst_diff"]
 ```
 
@@ -175,6 +190,12 @@ This section separates two tasks:
 1. Supervised sparse selection for inflation.
 2. Dynamic multivariate forecasting via VAR on selected features.
 
+Specific implementation detail:
+
+- `LassoCV` is fit with `TimeSeriesSplit(n_splits=5)` rather than random cross-validation, which preserves time ordering.
+- The selected regularization strength `alpha` is then reused in a second `Lasso(...)` fit to extract non-zero coefficients explicitly.
+- Those surviving predictors are not used as the final model directly; they are passed into the shared VAR forecast pipeline.
+
 Notebook code blocks:
 
 ```python
@@ -188,7 +209,7 @@ optimal_alpha = fred_lasso.alpha_
 ```
 
 ```python
-lasso2 = linear_model.Lasso(alpha=optimal_alpha, normalize=True)
+lasso2 = linear_model.Lasso(alpha=optimal_alpha)
 lasso2.fit(X_train, y_train)
 lasso_coefs = pd.DataFrame({"features": list(X_train), "coef": lasso2.coef_})
 lasso_coefs = lasso_coefs[lasso_coefs.coef != 0.0]
@@ -207,6 +228,12 @@ $$
 $$
 
 Conceptually, this asks whether nonlinear one-step predictive relevance produces better linear system forecasts over horizon.
+
+Specific implementation detail:
+
+- The feature matrix is first restricted to transformed (`*_diff`) predictors and standardized with `StandardScaler()`.
+- `XGBRegressor()` is used as the ranking model, and `plot_importance(...)` is used to identify the most influential predictors.
+- As with the Lasso branch, the selected variables are then fed into the same downstream VAR function for a controlled comparison.
 
 Notebook code blocks:
 
@@ -229,24 +256,77 @@ plot_importance(xgb, max_num_features=5, ax=ax_xgb)
 
 After ranking, chosen predictors are renamed and passed to `var_create(...)` for apples-to-apples MSE comparison with the other two pipelines.
 
-## 8. Comparative Findings and Interpretation
+## 8. PCA-Ranked VAR Pipeline
 
-The notebook’s comparative evaluation indicates the theory-driven benchmark VAR performs best on inflation forecast MSE among the three approaches.
+PCA is used here as an unsupervised feature-ranking stage before re-estimating VAR on a compact subset of original variables.
+
+The predictor matrix is standardized:
+
+$$
+Z_{ij} = \frac{X_{ij} - \mu_j}{\sigma_j}.
+$$
+
+PCA is then fit on the training predictors only:
+
+$$
+Z = U \Lambda V^\top.
+$$
+
+Two related diagnostics are used:
+
+- a scree plot, which shows explained variance component by component,
+- a cumulative explained variance plot, which shows how quickly total variance is captured as more components are added.
+
+Specific implementation detail:
+
+- The notebook first fits a full PCA on the training matrix to inspect the explained-variance profile.
+- It then fits a retained PCA with `n_components=0.95`, keeping enough components to explain about 95% of predictor variance.
+- Original variables are ranked by weighted absolute loading contribution across retained components.
+- The top 5 PCA-ranked variables are then passed into the same downstream `VAR` function.
+
+Notebook code blocks:
+
+```python
+scaler_pca = preprocessing.StandardScaler()
+X_train_scaled = scaler_pca.fit_transform(X_train)
+
+pca_full = PCA(svd_solver='full')
+pca_full.fit(X_train_scaled)
+```
+
+```python
+pca_fs = PCA(n_components=0.95, svd_solver='full')
+pca_fs.fit(X_train_scaled)
+
+loadings = pca_fs.components_.T
+feature_scores = (abs(loadings) * pca_fs.explained_variance_ratio_).sum(axis=1)
+```
+
+```python
+pca_selected_features = score_df['feature'].head(5).tolist()
+pca_var_cols = pca_selected_features + ['cpi_diff']
+mse4, df4 = var_create(columns=pca_var_cols, data=fred_pca)
+```
+
+## 9. Comparative Findings and Interpretation
+
+The notebook’s comparative evaluation indicates the theory-driven benchmark VAR performs best on inflation forecast MSE among the compared approaches.
 
 Interpretation:
 
 - Good feature ranking in a supervised predictive model does not guarantee good multi-step dynamic forecasting in a VAR.
 - Endogenous propagation in VAR can reward structurally coherent macro sets more than purely top-ranked predictive subsets.
+- PCA can summarize broad predictor structure well, but that does not automatically imply the top loading-driven variables will produce the best downstream inflation forecasts.
 
 Notebook comparison block:
 
 ```python
-ax = sns.barplot(x=["Traditional", "Lasso", "XGB"], y=[mse1, mse2, mse3])
+ax = sns.barplot(x=["Traditional", "Lasso", "XGBoost", "PCA"], y=[mse1, mse2, mse3, mse4])
 ax.set_title("Comparing MSEs", fontsize=16, fontname="Verdana")
 ax.set_ylabel("MSE", fontname="Verdana")
 ```
 
-## 9. Programmatic Backbone and Practical Value
+## 10. Programmatic Backbone and Practical Value
 
 The notebook keeps one common evaluation spine:
 
@@ -272,41 +352,57 @@ def var_create(columns, data):
 mse1, df1 = var_create(columns=[...traditional set...], data=fred)
 mse2, df2 = var_create(columns=[...lasso-selected set...], data=fred)
 mse3, df3 = var_create(columns=[...xgb-selected set...], data=fred)
+mse4, df4 = var_create(columns=[...pca-selected set...], data=fred_pca)
 ```
 
 That design makes the project technically defensible for research and interview discussion: same endpoint model, controlled feature-selection interventions, explicit quantitative comparison.
 
-## 10. Interview Narrative
+## 11. Interview Narrative
 
-Context:
+### Context
 
-- The project addressed inflation forecasting with a high-dimensional macro dataset where many predictors are correlated, regime-sensitive, and potentially nonstationary.
+- The project addresses inflation forecasting with a high-dimensional macroeconomic dataset in which predictors are correlated, regime-sensitive, and often only usable after transformation.
+- The practical problem is not just prediction accuracy in isolation, but whether a chosen feature set remains useful once placed inside a multivariate dynamic forecasting system.
 
-Goal:
+### Goal
 
-- Determine whether ML-based feature selection can improve inflation forecasting when the final model is a multivariate dynamic system (`VAR`) rather than a standalone regression.
+- Evaluate whether alternative feature-selection strategies improve inflation forecasting when the terminal model is a `VAR`.
+- Keep the forecasting engine fixed and vary only the variable-selection logic.
 
-Execution:
+### Execution
 
-1. Built a theory-driven benchmark VAR using macro variables chosen from economic priors.
-- What happened: selected an interpretable set (inflation, income, labor, policy rate, FX, housing), transformed to annual differences, and fit a fixed-lag VAR.
-- Why it matters: this provides a structurally coherent baseline and prevents the comparison from being purely algorithmic.
+1. Built a theory-driven benchmark VAR.
+- What happened: selected a compact macro block from economic priors, transformed variables to annual differences, and fit a fixed-lag monthly VAR.
+- Why it matters: this establishes a structurally coherent baseline and prevents the comparison from being purely algorithmic.
 
-2. Built a Lasso-based selection pipeline with time-aware validation, then re-estimated VAR on selected predictors.
-- What happened: used `LassoCV` with `TimeSeriesSplit` to select sparse features and then passed non-zero predictors into the same VAR forecasting pipeline.
-- Why it matters: this tests whether sparse linear selection improves downstream multivariate forecast performance, not just one-step supervised fit.
+2. Built a Lasso-selected VAR branch.
+- What happened: used `LassoCV` with `TimeSeriesSplit` to select sparse predictors, then passed the surviving variables into the same `VAR` forecasting routine.
+- Why it matters: this tests whether sparse linear screening improves downstream system forecasting rather than just one-step supervised fit.
 
-3. Built an XGBoost-based selection pipeline to capture nonlinear predictor relevance, then re-estimated VAR on top-ranked features.
-- What happened: standardized transformed predictors, trained `XGBRegressor`, extracted top importance features, and used them as the VAR input set.
-- Why it matters: this evaluates whether nonlinear predictive salience translates into better linear system forecasts over multi-step horizons.
+3. Built an XGBoost-selected VAR branch.
+- What happened: standardized transformed predictors, fit `XGBRegressor`, ranked features by importance, and reused the top variables inside the same `VAR` pipeline.
+- Why it matters: this tests whether nonlinear predictive salience translates into stronger linear multi-step forecasts.
 
-4. Enforced a controlled experiment design across all three pipelines.
-- What happened: kept target definition, train/test period split, forecast horizon, lag order, and error metric (`MSE`) consistent.
-- Why it matters: differences in results can be attributed to feature-selection strategy rather than differences in downstream model or evaluation setup.
+4. Built a PCA-ranked VAR branch.
+- What happened: standardized training predictors, examined a scree plot and cumulative explained variance, retained enough components to explain most predictor variance, and ranked original variables using weighted absolute loadings.
+- Why it matters: this introduces an unsupervised, factor-based ranking mechanism that captures broad predictor structure without directly fitting to the target.
 
-Outcome:
+5. Enforced a controlled experiment design.
+- What happened: kept target definition, train/test period split, lag order, forecast horizon, and `MSE` metric consistent across all branches.
+- Why it matters: differences in performance can be attributed to feature-selection strategy rather than to changes in the downstream model.
 
-- The benchmark specification delivered the strongest forecast performance in this setup.
-- Main technical insight: strong one-step feature ranking does not automatically transfer to stronger multi-step forecasts once endogenous VAR feedback loops are active.
-- Practical implication: for macro forecasting, economically coherent variable sets can outperform purely data-driven ranking when horizon length, regime shifts, and joint system dynamics matter.
-- Operational takeaway: ML selection remains useful for screening, but final model quality must be validated in the exact forecasting system used for decisions.
+### Outcome
+
+- The theory-driven benchmark remained the strongest forecasting specification in this setup.
+- Lasso and XGBoost were useful as screening mechanisms, but neither guaranteed better multi-step inflation forecasts once endogenous VAR feedback was introduced.
+- PCA added a useful structural comparison by showing that broad predictor variance can be summarized effectively, but that strong factor loadings do not necessarily imply the best downstream forecast behavior.
+
+### Main Technical Insight
+
+- Strong one-step feature ranking does not automatically transfer to stronger multi-step system forecasts.
+- In macro forecasting, the interaction between variable choice, regime sensitivity, and endogenous dynamics can dominate pure predictive ranking quality.
+
+### Practical Takeaway
+
+- Machine learning and PCA are valuable for screening and structure discovery.
+- Final model quality still has to be validated in the exact forecasting system used for decision-making, not just in the preliminary selection stage.
